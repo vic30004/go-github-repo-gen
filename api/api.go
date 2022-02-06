@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -72,25 +73,98 @@ func GetUserFromGithub() {
 	fmt.Println("")
 }
 
-func CreateRepo() {
-	repoName := askUserForInput("repo name")
-	repoDescription := askUserForInput("description")
-	templateOwner := askUserForInput("template owner")
-	templateRepo := askUserForInput("template repo name")
-	authToken := goDotEnvVar("AUTH_KEY")
+func createReadme(name string) {
+	readmeName:=fmt.Sprintf("# %s", name)
+	cmd := exec.Command("echo", readmeName)
 
-	values := map[string]string{"name": repoName, "description": repoDescription}
-	json_data, err := json.Marshal(values)
-	authroization := "token " + authToken
+	// Make test file
+	testFile, err := os.Create("README.md")
 	if err != nil {
-		fmt.Println(err.Error())
-		log.Fatal(err)
+		panic(err)
+	}
+	defer testFile.Close()
+
+	// Redirect the output here (this is the key part)
+	cmd.Stdout = testFile
+
+	err = cmd.Start()
+	if err != nil {
+		panic(err)
+	}
+	cmd.Wait()
+}
+
+func commitChanges() {
+	commit := exec.Command("git", "commit", "-m", "'Initial commit'")
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	commit.Stdout = &out
+	commit.Stderr = &stderr
+	err := commit.Run()
+	if err != nil {
+		fmt.Println(fmt.Sprint(err) + ": " + stderr.String())
+		return
+	}
+	fmt.Println("Result: " + out.String())
+	fmt.Println("Initial Commit made")
+}
+
+func initRepo(name string, url string) {
+	localPath := goDotEnvVar("LOCALPATH")
+	dir := fmt.Sprintf("%s/%s", localPath, name)
+	err := os.MkdirAll(dir, os.ModePerm)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	fmt.Println("Folder created")
+	os.Chdir(dir)
+
+	init := exec.Command("git", "init").Run()
+	if init != nil {
+		log.Fatal(init)
+	}
+	fmt.Println("Git init complete")
+
+	// create readme
+	createReadme(name)
+
+	// add changes
+	addChanges := exec.Command("git", "add", ".").Run()
+	if addChanges != nil {
+		log.Fatal(addChanges)
+	}
+	fmt.Println("Readme added")
+
+	// commit changes
+	commitChanges()
+
+	// make sure we are on main branch
+	branch := exec.Command("git", "branch", "-M", "main").Run()
+	if branch != nil {
+		log.Fatal(branch)
 	}
 
-	fmt.Println("Preparing to create repo")
+	//Connect to repo
+	repoAddress := fmt.Sprintf("%s.git", url)
+	remote := exec.Command("git", "remote", "add", "origin", repoAddress).Run()
+	if remote != nil {
+		log.Fatal(remote.Error())
+	}
+	fmt.Println("Connection to repo complete")
 
-	post_url := fmt.Sprintf("https://api.github.com/repos/%s/%s", templateOwner, templateRepo)
-	req, err := http.NewRequest("POST", post_url, bytes.NewBuffer(json_data))
+	// push changes
+	push := exec.Command("git", "push", "-u", "origin", "main").Run()
+	if push != nil {
+		log.Fatal(push.Error())
+	}
+	fmt.Println("Changes pushed to github!")
+}
+
+func makePostRequest(url string, json_data []byte) GithubRepoRequirements {
+	authToken := goDotEnvVar("AUTH_KEY")
+	authroization := "token " + authToken
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(json_data))
 	req.Header.Add("Accept", "application/vnd.github.v3+json")
 	req.Header.Add("Authorization", authroization)
 
@@ -110,10 +184,55 @@ func CreateRepo() {
 
 	var githubRepo GithubRepoRequirements
 	json.Unmarshal(body, &githubRepo)
-	fmt.Println(githubRepo.Name)
+	return githubRepo
+}
+
+func CreateRepoFromTemplate() {
+	repoName := askUserForInput("repo name")
+	repoDescription := askUserForInput("description")
+	templateOwner := askUserForInput("template owner")
+	templateRepo := askUserForInput("template repo name")
+
+	values := map[string]string{"name": repoName, "description": repoDescription}
+	json_data, err := json.Marshal(values)
+	if err != nil {
+		fmt.Println(err.Error())
+		log.Fatal(err)
+	}
+	fmt.Println("Preparing to create repo")
+
+	post_url := fmt.Sprintf("https://api.github.com/repos/%s/%s", templateOwner, templateRepo)
+
+	res := makePostRequest(post_url, json_data)
+
+	fmt.Println(res.Name)
 	fmt.Println("Repo Created! Happy Hacking.")
 	fmt.Println("")
-	fmt.Printf("Name: %s\nDescription: %s\nUrl: %s\nHomepage: %s\n", githubRepo.Name, githubRepo.Description, githubRepo.Url, githubRepo.Homepage)
+	fmt.Printf("Name: %s\nDescription: %s\nUrl: %s\nHomepage: %s\n", res.Name, res.Description, res.Url, res.Homepage)
 	fmt.Println("")
+}
 
+func CreateNewRepo() {
+	repoName := askUserForInput("repo name")
+	repoDescription := askUserForInput("description")
+	values := map[string]string{"name": repoName, "description": repoDescription}
+
+	json_data, err := json.Marshal(values)
+	if err != nil {
+		fmt.Println(err.Error())
+		log.Fatal(err)
+	}
+
+	fmt.Println("Preparing to create repo")
+
+	post_url := fmt.Sprintf("https://api.github.com/user/repos")
+	res := makePostRequest(post_url, json_data)
+
+	fmt.Println("Repo Created!")
+	fmt.Println("")
+	fmt.Printf("Name: %s\nDescription: %s\nUrl: %s\nHomepage: %s\n", res.Name, res.Description, res.Url, res.Homepage)
+	fmt.Println("")
+	fmt.Println("Initializing repo")
+
+	initRepo(res.Name, res.Url)
 }
