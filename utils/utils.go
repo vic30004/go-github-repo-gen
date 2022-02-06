@@ -33,6 +33,8 @@ func GetUserInput() {
 			} else if strings.ToUpper(text) == "E" {
 				fmt.Println("Hope to see you again!")
 				return
+			} else if strings.ToUpper(text) == "B" {
+				api.CreateRepo()
 			}
 		}
 	}
